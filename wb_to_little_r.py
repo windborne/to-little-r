@@ -47,8 +47,8 @@ def wb_get_request(url):
 In this section, we have the core functions to convert data to little_r
 """
 
-def convert_to_little_r(point, output_file='export.little_r'):
-    def format_value(value, fortran_format):
+def convert_to_little_r(point, output_file=None):
+    def format_value(value, fortran_format, align=None):
         if fortran_format[0] == 'F':
             length, decimal_places = fortran_format[1:].split('.')
             if value is None or value == '':
@@ -68,6 +68,9 @@ def convert_to_little_r(point, output_file='export.little_r'):
             length = int(fortran_format[1:])
             if value is None:
                 return ' ' * length
+
+            if align == 'right':
+                return str(value)[:length].rjust(length, ' ')
 
             return str(value)[:length].ljust(length, ' ')
 
@@ -139,7 +142,7 @@ def convert_to_little_r(point, output_file='export.little_r'):
         format_value(-888888, 'I10'),
 
         # Date: A20 YYYYMMDDhhmmss
-        format_value(observation_time.strftime('%Y%m%d%H%M%S'), 'A20'),
+        format_value(observation_time.strftime('%Y%m%d%H%M%S'), 'A20', align='right'),
 
         # SLP, QC: F13.5, I7
         format_value(-888888.0, 'F13.5') + format_value(0, 'I7'),
@@ -265,8 +268,9 @@ def convert_to_little_r(point, output_file='export.little_r'):
 
     in_little_r = '\n'.join(lines)
 
-    with open(output_file, 'w') as f:
-        f.write(in_little_r)
+    if output_file is not None:
+        with open(output_file, 'w') as f:
+            f.write(in_little_r)
 
     return in_little_r
 
@@ -297,7 +301,12 @@ def output_data(accumulated_observations, mission_name, starttime, bucket_hours)
             output_file = (f"WindBorne_%s_%04d-%02d-%02d_%02d:00_%dh.little_r" %
                            (mission_name, mt.year, mt.month, mt.day, mt.hour, bucket_hours))
 
-            convert_to_little_r(segment, output_file)
+
+            with open(output_file, 'w') as f:
+                for point in segment:
+                    data = convert_to_little_r(point)
+                    f.write(data)
+                    f.write('\n')
 
             start_index = i
             curtime += datetime.timedelta(hours=bucket_hours).seconds
@@ -307,7 +316,11 @@ def output_data(accumulated_observations, mission_name, starttime, bucket_hours)
     mt = datetime.datetime.fromtimestamp(curtime, tz=datetime.timezone.utc) + datetime.timedelta(hours=bucket_hours / 2)
     output_file = (f"WindBorne_%s_%04d-%02d-%02d_%02d:00_%dh.little_r" %
                    (mission_name, mt.year, mt.month, mt.day, mt.hour, bucket_hours))
-    convert_to_little_r(segment, output_file)
+    with open(output_file, 'w') as f:
+        for point in segment:
+            data = convert_to_little_r(point)
+            f.write(data)
+            f.write('\n')
 
 
 def main():
@@ -328,6 +341,10 @@ def main():
     parser.add_argument("times", nargs='+',
                         help='Starting and ending times to retrieve obs.  Format: YY-mm-dd_HH:MM '
                              'Ending time is optional, with current time used as default')
+    parser.add_argument('-b', '--bucket_hours', type=float, default=6.0,
+                        help='Number of hours of observations to accumulate into a file before opening the next file')
+    parser.add_argument('-c', '--combine_missions', action='store_true',
+                        help="If selected, all missions are combined in the same output file")
     args = parser.parse_args()
 
     if len(args.times) == 1:
@@ -349,6 +366,7 @@ def main():
         exit(1)
 
     args = parser.parse_args()
+    bucket_hours = args.bucket_hours
 
     observations_by_mission = {}
     accumulated_observations = []
@@ -383,19 +401,16 @@ def main():
             # alternatively, you could call `time.sleep(60)` and keep polling here
             # (though you'd have to move where you were calling convert_to_little_r)
 
-
     if len(observations_by_mission) == 0:
         print("No observations found")
         return
 
-    for mission_name, accumulated_observations in observations_by_mission.items():
-        for point in accumulated_observations:
-            output_dir = os.path.join('data', mission_name)
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir, exist_ok=True)
-
-            output_file = os.path.join(output_dir, f"{point['id']}.little_r")
-            convert_to_little_r(point, output_file)
+    if args.combine_missions:
+        mission_name = 'all'
+        output_data(accumulated_observations, mission_name, starttime, bucket_hours)
+    else:
+        for mission_name, accumulated_observations in observations_by_mission.items():
+            output_data(accumulated_observations, mission_name, starttime, bucket_hours)
 
 
 if __name__ == '__main__':
